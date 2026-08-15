@@ -11,7 +11,7 @@ struct EvaluationNnueBase
     static constexpr nnue_count_t tuple_count = 36;
     static constexpr nnue_count_t tuple_states = 81;
     static constexpr nnue_count_t feature_size = tuple_count * tuple_states;
-    static constexpr nnue_count_t hidden_size = 768;
+    static constexpr nnue_count_t hidden_size = 256;
 
     static constexpr int32_t QA = 255;
     static constexpr int32_t QB = 64;

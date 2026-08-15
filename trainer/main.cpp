@@ -1,5 +1,9 @@
 #include <torch/torch.h>
 
+#include <ATen/cuda/CUDAGraph.h>
+#include <c10/cuda/CUDAGuard.h>
+#include <c10/cuda/CUDAStream.h>
+
 #include <array>
 #include <chrono>
 #include <cstdint>
@@ -65,7 +69,7 @@ struct DataEntry
 };
 
 constexpr int32_t input_size = 49;
-constexpr int32_t hidden_size = 768;
+constexpr int32_t hidden_size = 256;
 constexpr int32_t tuple_count = 36;
 constexpr int32_t tuple_states = 81;
 constexpr int32_t feature_size = tuple_count * tuple_states;
@@ -514,25 +518,17 @@ int run_training()
     auto optimizer = torch::optim::Adam(net.parameters(), adam_options);
     auto criterion = torch::nn::MSELoss();
 
-    data_type total_train_loss = 0.0;
-    data_type total_test_loss = 0.0;
-    for (auto epoch = 0; epoch < 200; epoch++)
+    auto static_data = torch::zeros({ batch_size, 2, input_size }, torch::TensorOptions().dtype(data_type_val).device(device));
+    auto static_target = torch::zeros({ batch_size, 1 }, torch::TensorOptions().dtype(data_type_val).device(device));
+    auto static_loss = torch::zeros({ 1 }, torch::TensorOptions().dtype(data_type_val).device(device));
+    auto train_loss_accumulator = torch::zeros({ 1 }, torch::TensorOptions().dtype(data_type_val).device(device));
+
+    const auto train_iteration = [&]()
     {
-        const auto epoch_start = chrono::high_resolution_clock::now();
-        print_time(start);
-        cout << "Starting epoch " << epoch << endl;
-        auto train_loss_accumulator = torch::zeros({ 1 }, torch::TensorOptions().dtype(data_type_val).device(device));
-        size_t batch_index = 0;
-        for (auto& batch : *train_loader)
-        {
-            batch_index++;
-            optimizer.zero_grad();
+        optimizer.zero_grad();
 
-            auto data = batch.data.to(device);
-            auto target = batch.target.to(device);
-
-            auto us_stm = data.select(1, 0);
-            auto them_stm = data.select(1, 1);
+        auto us_stm = static_data.select(1, 0);
+        auto them_stm = static_data.select(1, 1);
 
             std::vector<torch::Tensor> us_variants;
             std::vector<torch::Tensor> them_variants;
@@ -564,19 +560,61 @@ int run_training()
             them_variants.push_back(torch::flip(them_stm, 1));
 
             auto predictions = net.forward(torch::cat(us_variants, 0), torch::cat(them_variants, 0));
-            auto targets = target.repeat({ 8, 1 });
+            auto targets = static_target.repeat({ 8, 1 });
 
             auto loss = criterion->forward(predictions, targets);
 
             loss.backward();
             optimizer.step();
 
-            const auto this_batch_size = batch.data.size(0);
-            train_loss_accumulator += loss.detach() * static_cast<double>(this_batch_size);
+            static_loss.copy_(loss.detach());
+            train_loss_accumulator += loss.detach() * static_cast<double>(batch_size);
+    };
+
+    at::cuda::CUDAGraph graph;
+    const auto capture_stream = c10::cuda::getStreamFromPool();
+    c10::cuda::CUDAStreamGuard stream_guard(capture_stream);
+    bool graph_captured = false;
+
+    data_type total_train_loss = 0.0;
+    data_type total_test_loss = 0.0;
+    for (auto epoch = 0; epoch < 200; epoch++)
+    {
+        const auto epoch_start = chrono::high_resolution_clock::now();
+        print_time(start);
+        cout << "Starting epoch " << epoch << endl;
+        size_t batch_index = 0;
+        for (auto& batch : *train_loader)
+        {
+            if (batch.data.size(0) != batch_size)
+            {
+                continue;
+            }
+            batch_index++;
+
+            static_data.copy_(batch.data);
+            static_target.copy_(batch.target);
+
+            if (!graph_captured)
+            {
+                for (auto warmup = 0; warmup < 3; warmup++)
+                {
+                    train_iteration();
+                }
+                torch::cuda::synchronize();
+                graph.capture_begin();
+                train_iteration();
+                graph.capture_end();
+                torch::cuda::synchronize();
+                graph_captured = true;
+            }
+
+            graph.replay();
+
             if (batch_index % 100 == 0)
             {
                 print_time(epoch_start);
-                cout << "Batch " << batch_index << " | Loss: " << loss.item<data_type>() << endl;
+                cout << "Batch " << batch_index << " | Loss: " << static_loss.item<data_type>() << endl;
             }
             if (batch_index % 1000 == 0)
             {
@@ -584,6 +622,7 @@ int run_training()
             }
         }
         total_train_loss = train_loss_accumulator.item<data_type>();
+        train_loss_accumulator.zero_();
 
         torch::NoGradGuard no_grad;
         for (auto& batch : *test_loader)
