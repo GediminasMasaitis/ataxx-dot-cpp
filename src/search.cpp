@@ -135,9 +135,26 @@ Score Search::alpha_beta(ThreadState& thread_state, Position& pos, Ply depth, co
     Score best_score = -inf;
     Move best_move = no_move;
     TranspositionTableFlag flag = Upper;
+    Score futility_eval = 0;
+    bool futility_eval_computed = false;
     for(MoveCount move_index = 0; move_index < move_count; ++move_index)
     {
         MoveOrder::order_next_move(moves, move_scores, move_count, move_index);
+
+        // FUTILITY PRUNING
+        if(ply > 0 && depth <= 4 && move_index >= 3
+            && best_score > -(mate - 200) && alpha < mate - 200)
+        {
+            if(!futility_eval_computed)
+            {
+                futility_eval = static_evaluate(pos);
+                futility_eval_computed = true;
+            }
+            if(futility_eval + 256 + 128 * depth <= alpha)
+            {
+                break;
+            }
+        }
 
         const auto& move = moves[move_index];
         pos.make_move_in_place(move);
