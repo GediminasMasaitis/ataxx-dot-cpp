@@ -249,12 +249,54 @@ Score Search::alpha_beta(ThreadState& thread_state, Position& pos, Ply depth, co
     return best_score;
 }
 
+Score Search::aspiration(ThreadState& thread_state, Position& pos, const Ply iteration_depth, Score score)
+{
+    int32_t delta = 16;
+    int32_t alpha = std::max(score - delta, -static_cast<int32_t>(inf));
+    int32_t beta = std::min(score + delta, static_cast<int32_t>(inf));
+    Ply depth = iteration_depth;
+
+    while(true)
+    {
+        score = alpha_beta(thread_state, pos, depth, 0, static_cast<Score>(alpha), static_cast<Score>(beta), true);
+        if(thread_state.timer.stopped)
+        {
+            break;
+        }
+
+        if(score >= beta)
+        {
+            beta = std::min(beta + delta, static_cast<int32_t>(inf));
+            if(depth > 1)
+            {
+                depth--;
+            }
+        }
+        else if(score <= alpha)
+        {
+            beta = (alpha + beta) / 2;
+            alpha = std::max(alpha - delta, -static_cast<int32_t>(inf));
+            depth = iteration_depth;
+        }
+        else
+        {
+            break;
+        }
+
+        delta *= 2;
+    }
+
+    return score;
+}
+
 SearchResult Search::iteratively_deepen(ThreadState& thread_state, Position& pos)
 {
     Score score = 0;
     for(int depth = 1; depth <= max_ply; ++depth)
     {
-        const Score iteration_score = alpha_beta(thread_state, pos, depth, 0, -inf, inf, true);
+        const Score iteration_score = depth >= 4
+            ? aspiration(thread_state, pos, static_cast<Ply>(depth), score)
+            : alpha_beta(thread_state, pos, depth, 0, -inf, inf, true);
         if(thread_state.timer.stopped)
         {
             break;
