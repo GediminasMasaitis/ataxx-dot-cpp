@@ -416,7 +416,7 @@ int run_training()
     auto device = torch::Device(torch::kCUDA);
     cout << "CUDA available: " << torch::cuda::is_available() << endl;
 
-    constexpr int32_t batch_size = 1024 * 32;
+    constexpr int32_t batch_size = 1024 * 8;
     //constexpr int32_t batch_size = 1024 * 16;
     //constexpr int32_t batch_size = 128;
 
@@ -439,7 +439,7 @@ int run_training()
     //constexpr auto train_path = "C:/shared/ataxx/data/data40Mnew.bin";
     //constexpr auto train_path = "C:/shared/ataxx/data/data3M.bin";
     //constexpr auto train_path = "C:/shared/ataxx/data/data_train_small.bin";
-    constexpr auto limit = 2'000'000;
+    constexpr auto limit = 545'000'000;
     //constexpr auto limit = -1;
     auto train_reader = CachingReader(train_path, limit);
     auto train_transient_set = TransientDataset(train_reader);
@@ -465,6 +465,9 @@ int run_training()
     for (auto epoch = 0; epoch < 200; epoch++)
     {
         const auto epoch_start = chrono::high_resolution_clock::now();
+        print_time(start);
+        cout << "Starting epoch " << epoch << endl;
+        auto train_loss_accumulator = torch::zeros({ 1 }, torch::TensorOptions().dtype(data_type_val).device(device));
         size_t batch_index = 0;
         for (auto& batch : *train_loader)
         {
@@ -476,34 +479,38 @@ int run_training()
 
             auto us_stm = data.select(1, 0);
             auto them_stm = data.select(1, 1);
-            auto us_nstm = torch::flip(them_stm, 1);
-            auto them_nstm = torch::flip(us_stm, 1);
-            auto prediction = net.forward(us_stm, them_stm);
-            auto prediction_flip = net.forward(them_nstm, us_nstm);
+
+            std::vector<torch::Tensor> us_variants;
+            std::vector<torch::Tensor> them_variants;
+
+            us_variants.push_back(us_stm);
+            them_variants.push_back(them_stm);
+            us_variants.push_back(torch::flip(us_stm, 1));
+            them_variants.push_back(torch::flip(them_stm, 1));
 
             us_stm = us_stm.view({-1, 7, 7}).transpose(1, 2).reshape({-1, 49});
             them_stm = them_stm.view({-1, 7, 7}).transpose(1, 2).reshape({-1, 49});
-            us_nstm = torch::flip(them_stm, 1);
-            them_nstm = torch::flip(us_stm, 1);
-            auto prediction_diagonal = net.forward(us_stm, them_stm);
-            auto prediction_diagonal_flip = net.forward(them_nstm, us_nstm);
+            us_variants.push_back(us_stm);
+            them_variants.push_back(them_stm);
+            us_variants.push_back(torch::flip(us_stm, 1));
+            them_variants.push_back(torch::flip(them_stm, 1));
 
             us_stm = us_stm.view({ -1, 7, 7 }).rot90(1, { 1, 2 }).reshape({ -1, 49 });
             them_stm = them_stm.view({ -1, 7, 7 }).rot90(1, { 1, 2 }).reshape({ -1, 49 });
-            us_nstm = torch::flip(them_stm, 1);
-            them_nstm = torch::flip(us_stm, 1);
-            auto prediction_rot = net.forward(us_stm, them_stm);
-            auto prediction_rot_flip = net.forward(them_nstm, us_nstm);
+            us_variants.push_back(us_stm);
+            them_variants.push_back(them_stm);
+            us_variants.push_back(torch::flip(us_stm, 1));
+            them_variants.push_back(torch::flip(them_stm, 1));
 
             us_stm = us_stm.view({ -1, 7, 7 }).transpose(1, 2).reshape({ -1, 49 });
             them_stm = them_stm.view({ -1, 7, 7 }).transpose(1, 2).reshape({ -1, 49 });
-            us_nstm = torch::flip(them_stm, 1);
-            them_nstm = torch::flip(us_stm, 1);
-            auto prediction_rot_diagonal = net.forward(us_stm, them_stm);
-            auto prediction_rot_diagonal_flip = net.forward(them_nstm, us_nstm);
+            us_variants.push_back(us_stm);
+            them_variants.push_back(them_stm);
+            us_variants.push_back(torch::flip(us_stm, 1));
+            them_variants.push_back(torch::flip(them_stm, 1));
 
-            auto predictions = torch::stack({ prediction, prediction_flip, prediction_diagonal, prediction_diagonal_flip, prediction_rot, prediction_rot_flip, prediction_rot_diagonal, prediction_rot_diagonal_flip });
-            auto targets = torch::stack({ target, target, target, target, target, target, target, target });
+            auto predictions = net.forward(torch::cat(us_variants, 0), torch::cat(them_variants, 0));
+            auto targets = target.repeat({ 8, 1 });
 
             auto loss = criterion->forward(predictions, targets);
 
@@ -511,14 +518,14 @@ int run_training()
             optimizer.step();
 
             const auto this_batch_size = batch.data.size(0);
-            const auto this_loss = loss.item<data_type>();
-            total_train_loss += this_loss * this_batch_size;
+            train_loss_accumulator += loss.detach() * static_cast<double>(this_batch_size);
             if (batch_index % 100 == 0)
             {
                 print_time(epoch_start);
-                cout << "Batch " << batch_index << " | Loss: " << this_loss << endl;
+                cout << "Batch " << batch_index << " | Loss: " << loss.item<data_type>() << endl;
             }
         }
+        total_train_loss = train_loss_accumulator.item<data_type>();
 
         torch::NoGradGuard no_grad;
         for (auto& batch : *test_loader)
