@@ -11,7 +11,9 @@
 using namespace std;
 
 #if _WIN32
-#else
+// Not embedded under the tuple architecture either - that network has its own
+// file, and requiring this one too would break the build for no reason.
+#elif !TUPLE_NNUE
 #define ENABLE_INCBIN 1
 #endif
 

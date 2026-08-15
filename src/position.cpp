@@ -106,7 +106,7 @@ PositionBase PositionBase::make_move_copy(const MoveStr& move_str) const
 
 void Position::accumulators_push()
 {
-    if constexpr (do_nnue)
+    if constexpr (use_accumulators)
     {
         if (!enable_accumulator_stack)
         {
@@ -120,7 +120,7 @@ void Position::accumulators_push()
 
 void Position::accumulators_pop()
 {
-    if constexpr (!do_nnue)
+    if constexpr (!use_accumulators)
     {
         return;
     }
@@ -135,7 +135,7 @@ void Position::accumulators_pop()
 
 void Position::accumulators_set(const Square sq, const Piece piece)
 {
-    if constexpr (!do_nnue)
+    if constexpr (!use_accumulators)
     {
         return;
     }
@@ -145,7 +145,7 @@ void Position::accumulators_set(const Square sq, const Piece piece)
 
 void Position::accumulators_unset(const Square sq, const Piece piece)
 {
-    if constexpr (!do_nnue)
+    if constexpr (!use_accumulators)
     {
         return;
     }
@@ -155,7 +155,7 @@ void Position::accumulators_unset(const Square sq, const Piece piece)
 
 void Position::reset_accumulators()
 {
-    if constexpr (!do_nnue)
+    if constexpr (!use_accumulators)
     {
         return;
     }

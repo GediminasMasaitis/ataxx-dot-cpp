@@ -1,6 +1,7 @@
 #include "uai.h"
 
 #include "evaluation_nn_base.h"
+#include "evaluation_nn_tuple.h"
 
 #include <iostream>
 
@@ -10,7 +11,14 @@ int main()
 {
     cout << "ataxx.cpp by Gediminas Masaitis" << endl;
 
-    EvaluationNnueBase::init();
+    if constexpr (do_tuple_nnue)
+    {
+        EvaluationNnueTuple::init();
+    }
+    else
+    {
+        EvaluationNnueBase::init();
+    }
 
     Uai uai;
     uai.run();

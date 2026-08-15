@@ -23,14 +23,29 @@ constexpr bool do_datagen = true;
 constexpr bool do_datagen = false;
 #endif
 
-// Hidden layer activation. Must match SCRELU in the bullet trainer that
-// produced the network, since it changes what the weights mean.
+// Hidden layer activation for the 98 -> 768 network. Must match SCRELU in the
+// bullet trainer that produced it, since it changes what the weights mean.
 #define SCRELU 1
 #if SCRELU
 constexpr bool do_screlu = true;
 #else
 constexpr bool do_screlu = false;
 #endif
+
+// Use the Zataxx architecture (2916 tuple inputs -> 256, single perspective,
+// SCReLU) instead of 98 -> 768x2. Train it with examples/ataxx_tuple.rs, which
+// writes networks/default-tuple.nnue-floats. Always SCReLU, so SCRELU above
+// does not apply to it.
+#define TUPLE_NNUE 1
+#if TUPLE_NNUE
+constexpr bool do_tuple_nnue = true;
+#else
+constexpr bool do_tuple_nnue = false;
+#endif
+
+// The tuple network rebuilds its accumulator each evaluation, so the stack and
+// all the make/unmake bookkeeping around it is dead weight there.
+constexpr bool use_accumulators = do_nnue && !do_tuple_nnue;
 
 using Rank = uint8_t;
 using File = uint8_t;
