@@ -310,7 +310,7 @@ struct Net : torch::nn::Module {
             }
         }
         gather_indices = register_buffer("gather_indices", gather);
-        pow3 = register_buffer("pow3", torch::tensor({ 1L, 3L, 9L, 27L }, torch::kLong));
+        pow3 = register_buffer("pow3", torch::tensor({ 1, 3, 9, 27 }, torch::kLong));
         tuple_offsets = register_buffer("tuple_offsets", torch::arange(tuple_count, torch::kLong) * tuple_states);
     }
 
@@ -319,7 +319,9 @@ struct Net : torch::nn::Module {
         const auto us_gathered = us.index_select(1, gather_indices).view({ batch, tuple_count, 4 }).to(torch::kLong);
         const auto them_gathered = them.index_select(1, gather_indices).view({ batch, tuple_count, 4 }).to(torch::kLong);
         const auto codes = ((us_gathered + 2 * them_gathered) * pow3).sum(2) + tuple_offsets;
-        const auto hidden = torch::embedding(feature_weights, codes).sum(1) + feature_bias;
+        const auto codes_flat = codes.view({ -1 });
+        const auto offsets = torch::arange(0, batch * tuple_count, tuple_count, codes_flat.options());
+        const auto hidden = std::get<0>(torch::embedding_bag(feature_weights, codes_flat, offsets)) + feature_bias;
         const auto activated = torch::clamp(hidden, 0.0, 1.0).square();
         return fc2->forward(activated);
     }
@@ -349,14 +351,15 @@ void print_params(const Net& model, int epoch)
     float max_val = 0;
     for (const auto& pair : model.named_parameters()) {
         auto& name = pair.key();
-        auto param = pair.value().reshape(-1);
+        const auto param = pair.value().reshape(-1).detach().to(torch::kCPU).contiguous();
+        const auto param_accessor = param.accessor<data_type, 1>();
         //cout << name << ": " << pair.value().sizes() << endl;
         //cout << name << ": " << param.sizes() << endl;
         ss << name << endl;
         file_human << name << endl;
         for (auto i = 0; i < param.size(0); i++)
         {
-            auto val = param[i].item<data_type>();
+            auto val = param_accessor[i];
             file_float.write(reinterpret_cast<char*>(&val), sizeof(data_type));
 
             float rounded = round(val * 512);
@@ -406,11 +409,12 @@ void print_time(chrono::time_point<chrono::high_resolution_clock> start)
     cout << "[" << seconds << "s] ";
 }
 
-int main()
+int run_training()
 {
     const auto start = chrono::high_resolution_clock::now();
     //auto device = torch::Device(torch::kCPU);
     auto device = torch::Device(torch::kCUDA);
+    cout << "CUDA available: " << torch::cuda::is_available() << endl;
 
     constexpr int32_t batch_size = 1024 * 32;
     //constexpr int32_t batch_size = 1024 * 16;
@@ -435,7 +439,7 @@ int main()
     //constexpr auto train_path = "C:/shared/ataxx/data/data40Mnew.bin";
     //constexpr auto train_path = "C:/shared/ataxx/data/data3M.bin";
     //constexpr auto train_path = "C:/shared/ataxx/data/data_train_small.bin";
-    constexpr auto limit = 545'000'000;
+    constexpr auto limit = 2'000'000;
     //constexpr auto limit = -1;
     auto train_reader = CachingReader(train_path, limit);
     auto train_transient_set = TransientDataset(train_reader);
@@ -461,8 +465,10 @@ int main()
     for (auto epoch = 0; epoch < 200; epoch++)
     {
         const auto epoch_start = chrono::high_resolution_clock::now();
+        size_t batch_index = 0;
         for (auto& batch : *train_loader)
         {
+            batch_index++;
             optimizer.zero_grad();
 
             auto data = batch.data.to(device);
@@ -507,6 +513,11 @@ int main()
             const auto this_batch_size = batch.data.size(0);
             const auto this_loss = loss.item<data_type>();
             total_train_loss += this_loss * this_batch_size;
+            if (batch_index % 100 == 0)
+            {
+                print_time(epoch_start);
+                cout << "Batch " << batch_index << " | Loss: " << this_loss << endl;
+            }
         }
 
         torch::NoGradGuard no_grad;
@@ -572,4 +583,17 @@ int main()
     //cout << str;
 
     return 0;
+}
+
+int main()
+{
+    try
+    {
+        return run_training();
+    }
+    catch (const std::exception& e)
+    {
+        cout << "FATAL: " << e.what() << endl;
+        return 1;
+    }
 }
