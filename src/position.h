@@ -4,8 +4,6 @@
 #include "types.h"
 #include "move.h"
 
-#include "evaluation_nn_base.h"
-
 #include <array>
 #include <vector>
 
@@ -34,16 +32,6 @@ struct UndoData
 
 struct Position : PositionBase
 {
-    bool enable_accumulator_stack = false;
-    EachPly<EvaluationNnueBase::hidden_layers_t> accumulators_stack;
-    Ply accumulator_index = 0;
-
-    void accumulators_push();
-    void accumulators_pop();
-    void accumulators_set(const Square sq, const Piece piece);
-    void accumulators_unset(const Square sq, const Piece piece);
-    void reset_accumulators();
-
     static constexpr int32_t max_history_count = 1024;
     std::array<UndoData, max_history_count> History;
     int32_t HistoryCount = 0;

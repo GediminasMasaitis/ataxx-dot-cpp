@@ -410,9 +410,6 @@ SearchResult Search::lazy_smp(Position& pos)
 SearchResult Search::run(Position& pos, const SearchParameters& parameters)
 {
     state.new_search(pos, parameters);
-    const auto original_enable_accumulator_stack = pos.enable_accumulator_stack;
-    pos.enable_accumulator_stack = true;
     const SearchResult result = lazy_smp(pos);
-    pos.enable_accumulator_stack = original_enable_accumulator_stack;
     return result;
 }

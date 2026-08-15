@@ -1,9 +1,7 @@
 #include "evaluation_nn_base.h"
 
-#include "attacks.h"
-
-#include <array>
 #include <cmath>
+#include <cstring>
 #include <fstream>
 #include <iostream>
 #include <sstream>
@@ -20,27 +18,38 @@ using namespace std;
 INCBIN(network, "networks/default.nnue-floats");
 #endif
 
-static constexpr Square get_index(const File file, const Rank rank)
+static float read_float(std::istream& stream)
 {
-    return rank * 7 + file;
+    char buffer[sizeof(float)];
+    stream.read(buffer, sizeof(float));
+    float value;
+    memcpy(&value, buffer, sizeof(float));
+    return value;
 }
 
-static EvaluationNnueBase::nnue_param_t read(std::istream& stream)
+static EvaluationNnueBase::nnue_param_t read_quantized(std::istream& stream, const int32_t scale)
 {
-    constexpr size_t size = sizeof(float);
-    char buffer[size];
-    stream.read(buffer, size);
-    const float* float_ptr = reinterpret_cast<float*>(buffer);
-    const auto result_float = *float_ptr;
-    const auto result_scaled = result_float * 128;
-    const auto result_rounded = round(result_scaled);
-    const auto result_quantized = static_cast<EvaluationNnueBase::nnue_param_t>(result_rounded);
-    return result_quantized;
+    const auto value = read_float(stream);
+    const auto rounded = round(value * scale);
+    return static_cast<EvaluationNnueBase::nnue_param_t>(rounded);
 }
 
 void EvaluationNnueBase::init()
 {
+    constexpr size_t float_count =
+        static_cast<size_t>(feature_size) * hidden_size
+        + hidden_size
+        + hidden_size
+        + 1;
+    constexpr size_t expected_size = float_count * sizeof(float);
+
 #if ENABLE_INCBIN
+    if (gnetworkSize != expected_size)
+    {
+        cout << "WARNING: embedded NNUE is " << gnetworkSize << " bytes, expected " << expected_size
+             << " - train a tuple network first, evaluation is garbage until then" << endl;
+        return;
+    }
     auto file = stringstream(ios::in | ios::out | ios::binary);
     file.write(reinterpret_cast<const char*>(gnetworkData), gnetworkSize);
     cout << "Using included NNUE" << endl;
@@ -51,54 +60,39 @@ void EvaluationNnueBase::init()
         constexpr auto path = "/mnt/c/shared/ataxx/nets/default.nnue-floats";
     #endif
     cout << "Reading NNUE from " << path << endl;
-    auto file = ifstream(path, ios::binary);
+    auto file = ifstream(path, ios::binary | ios::ate);
     if (!file.good())
     {
         cout << "Failed to open " << path << endl;
         return;
     }
+    const auto file_size = static_cast<size_t>(file.tellg());
+    if (file_size != expected_size)
+    {
+        cout << "WARNING: NNUE file is " << file_size << " bytes, expected " << expected_size
+             << " - train a tuple network first, evaluation is garbage until then" << endl;
+        return;
+    }
+    file.seekg(0);
 #endif
 
-    auto ss = stringstream();
-
-    ss << "Weights 1:" << endl;
-    for (auto i = 0; i < hidden_size; i++)
+    for (nnue_count_t feature = 0; feature < feature_size; feature++)
     {
-        for (auto j = 0; j < input_size; j++)
+        for (nnue_count_t hidden = 0; hidden < hidden_size; hidden++)
         {
-            input_weights[j][i] = read(file);
-            ss << input_weights[j][i] << " ";
-        }
-        ss << endl;
-    }
-
-    ss << "Bias 1: ";
-    for (auto i = 0; i < hidden_size; i++)
-    {
-        input_biases[i] = read(file);
-        ss << input_biases[i] << " ";
-    }
-
-    ss << endl << "Weights 2: ";
-    //for (auto i = 0; i < hidden_size; i++)
-    //{
-    //    hidden_weights[i] = read(file);
-    //    ss << hidden_weights[i] << " ";
-    //}
-
-    for(Color color = 0; color < Colors::Count; color++)
-    {
-        for (auto i = 0; i < hidden_size; i++)
-        {
-            hidden_weightses[color][i] = read(file);
-            ss << hidden_weightses[color][i] << " ";
+            feature_weights[feature][hidden] = read_quantized(file, QA);
         }
     }
 
-    ss << endl << "Bias 2: ";
-    hidden_bias = read(file);
-    ss << hidden_bias << endl;
+    for (nnue_count_t hidden = 0; hidden < hidden_size; hidden++)
+    {
+        feature_biases[hidden] = read_quantized(file, QA);
+    }
 
-    const auto str = ss.str();
-    //cout << str;
+    for (nnue_count_t hidden = 0; hidden < hidden_size; hidden++)
+    {
+        output_weights[hidden] = read_quantized(file, QB);
+    }
+
+    output_bias = static_cast<int32_t>(round(read_float(file) * QA * QB));
 }

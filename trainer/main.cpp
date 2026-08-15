@@ -34,9 +34,10 @@ struct DataEntry
 };
 
 constexpr int32_t input_size = 49;
-constexpr int32_t input_sides = 2;
 constexpr int32_t hidden_size = 768;
-constexpr bool double_accumulator = true;
+constexpr int32_t tuple_count = 36;
+constexpr int32_t tuple_states = 81;
+constexpr int32_t feature_size = tuple_count * tuple_states;
 using InputData = std::array<data_type, input_size>;
 using InputDatas = std::array<InputData, 2>;
 using OutputData = std::array<data_type, 1>;
@@ -197,8 +198,8 @@ public:
 
         const auto is_black = entry.turn == 1;
 
-        const auto us_stm = is_black ? reverse_bits(entry.black) : entry.white;
-        const auto them_stm = is_black ? reverse_bits(entry.white) : entry.black;
+        const auto us_stm = is_black ? entry.black : entry.white;
+        const auto them_stm = is_black ? entry.white : entry.black;
 
         //const auto us_nstm = is_black ? entry.white : reverse_bits(entry.black);
         //const auto them_nstm = is_black ? entry.black : reverse_bits(entry.white);
@@ -285,50 +286,51 @@ public:
 };
 
 struct Net : torch::nn::Module {
-    torch::nn::Linear fc1{ nullptr };
+    torch::Tensor feature_weights;
+    torch::Tensor feature_bias;
     torch::nn::Linear fc2{ nullptr };
+    torch::Tensor gather_indices;
+    torch::Tensor pow3;
+    torch::Tensor tuple_offsets;
 
     Net() {
-        fc1 = register_module("fc1", torch::nn::Linear(input_size * input_sides, hidden_size));
-        fc2 = register_module("fc2", torch::nn::Linear(hidden_size * (double_accumulator ? 2 : 1), 1));
-    }
+        feature_weights = register_parameter("feature_weights", torch::empty({ feature_size, hidden_size }).uniform_(-0.1, 0.1));
+        feature_bias = register_parameter("feature_bias", torch::zeros({ hidden_size }));
+        fc2 = register_module("fc2", torch::nn::Linear(hidden_size, 1));
 
-    torch::Tensor forward_inner(const torch::Tensor& us_stm, const torch::Tensor& them_stm, const torch::Tensor& us_nstm, const torch::Tensor& them_nstm) {
-        if constexpr (double_accumulator)
-        {
-            auto stm = torch::cat({us_stm, them_stm}, 1);
-            auto nstm = torch::cat({us_nstm, them_nstm}, 1);
-
-            stm = fc1->forward(stm);
-            nstm = fc1->forward(nstm);
-
-            auto combined = torch::cat({ stm, nstm }, 1);
-            combined = torch::relu(combined);
-
-            auto result = fc2->forward(combined);
-            return result;
+        auto gather = torch::empty({ tuple_count * 4 }, torch::kLong);
+        for (auto i = 0; i < 6; i++) {
+            for (auto j = 0; j < 6; j++) {
+                const auto tuple = i * 6 + j;
+                const auto base = i * 7 + j;
+                gather[tuple * 4 + 0] = base;
+                gather[tuple * 4 + 1] = base + 1;
+                gather[tuple * 4 + 2] = base + 7;
+                gather[tuple * 4 + 3] = base + 8;
+            }
         }
-        else
-        {
-            auto stm = torch::cat({ us_stm, them_stm }, 1);
-            stm = fc1->forward(stm);
-            stm = torch::relu(stm);
-            auto result = fc2->forward(stm);
-            return result;
-        }
+        gather_indices = register_buffer("gather_indices", gather);
+        pow3 = register_buffer("pow3", torch::tensor({ 1L, 3L, 9L, 27L }, torch::kLong));
+        tuple_offsets = register_buffer("tuple_offsets", torch::arange(tuple_count, torch::kLong) * tuple_states);
     }
 
-    torch::Tensor forward(const torch::Tensor& us_stm, const torch::Tensor& them_stm, const torch::Tensor& us_nstm, const torch::Tensor& them_nstm) {
-        auto result = forward_inner(us_stm, them_stm, us_nstm, them_nstm);
-        result = torch::sigmoid(result);
-        return result;
+    torch::Tensor forward_inner(const torch::Tensor& us, const torch::Tensor& them) {
+        const auto batch = us.size(0);
+        const auto us_gathered = us.index_select(1, gather_indices).view({ batch, tuple_count, 4 }).to(torch::kLong);
+        const auto them_gathered = them.index_select(1, gather_indices).view({ batch, tuple_count, 4 }).to(torch::kLong);
+        const auto codes = ((us_gathered + 2 * them_gathered) * pow3).sum(2) + tuple_offsets;
+        const auto hidden = torch::embedding(feature_weights, codes).sum(1) + feature_bias;
+        const auto activated = torch::clamp(hidden, 0.0, 1.0).square();
+        return fc2->forward(activated);
     }
 
-    torch::Tensor forward_no_sig(const torch::Tensor& us_stm, const torch::Tensor& them_stm, const torch::Tensor& us_nstm, const torch::Tensor& them_nstm)
+    torch::Tensor forward(const torch::Tensor& us, const torch::Tensor& them) {
+        return torch::sigmoid(forward_inner(us, them));
+    }
+
+    torch::Tensor forward_no_sig(const torch::Tensor& us, const torch::Tensor& them)
     {
-        auto result = forward_inner(us_stm, them_stm, us_nstm, them_nstm);
-        result *= 512;
-        return result;
+        return forward_inner(us, them) * 400;
     }
 };
 
@@ -470,29 +472,29 @@ int main()
             auto them_stm = data.select(1, 1);
             auto us_nstm = torch::flip(them_stm, 1);
             auto them_nstm = torch::flip(us_stm, 1);
-            auto prediction = net.forward(us_stm, them_stm, us_nstm, them_nstm);
-            auto prediction_flip = net.forward(them_nstm, us_nstm, them_stm, us_stm);
+            auto prediction = net.forward(us_stm, them_stm);
+            auto prediction_flip = net.forward(them_nstm, us_nstm);
 
             us_stm = us_stm.view({-1, 7, 7}).transpose(1, 2).reshape({-1, 49});
             them_stm = them_stm.view({-1, 7, 7}).transpose(1, 2).reshape({-1, 49});
             us_nstm = torch::flip(them_stm, 1);
             them_nstm = torch::flip(us_stm, 1);
-            auto prediction_diagonal = net.forward(us_stm, them_stm, us_nstm, them_nstm);
-            auto prediction_diagonal_flip = net.forward(them_nstm, us_nstm, them_stm, us_stm);
+            auto prediction_diagonal = net.forward(us_stm, them_stm);
+            auto prediction_diagonal_flip = net.forward(them_nstm, us_nstm);
 
             us_stm = us_stm.view({ -1, 7, 7 }).rot90(1, { 1, 2 }).reshape({ -1, 49 });
             them_stm = them_stm.view({ -1, 7, 7 }).rot90(1, { 1, 2 }).reshape({ -1, 49 });
             us_nstm = torch::flip(them_stm, 1);
             them_nstm = torch::flip(us_stm, 1);
-            auto prediction_rot = net.forward(us_stm, them_stm, us_nstm, them_nstm);
-            auto prediction_rot_flip = net.forward(them_nstm, us_nstm, them_stm, us_stm);
+            auto prediction_rot = net.forward(us_stm, them_stm);
+            auto prediction_rot_flip = net.forward(them_nstm, us_nstm);
 
             us_stm = us_stm.view({ -1, 7, 7 }).transpose(1, 2).reshape({ -1, 49 });
             them_stm = them_stm.view({ -1, 7, 7 }).transpose(1, 2).reshape({ -1, 49 });
             us_nstm = torch::flip(them_stm, 1);
             them_nstm = torch::flip(us_stm, 1);
-            auto prediction_rot_diagonal = net.forward(us_stm, them_stm, us_nstm, them_nstm);
-            auto prediction_rot_diagonal_flip = net.forward(them_nstm, us_nstm, them_stm, us_stm);
+            auto prediction_rot_diagonal = net.forward(us_stm, them_stm);
+            auto prediction_rot_diagonal_flip = net.forward(them_nstm, us_nstm);
 
             auto predictions = torch::stack({ prediction, prediction_flip, prediction_diagonal, prediction_diagonal_flip, prediction_rot, prediction_rot_flip, prediction_rot_diagonal, prediction_rot_diagonal_flip });
             auto targets = torch::stack({ target, target, target, target, target, target, target, target });
@@ -505,7 +507,6 @@ int main()
             const auto this_batch_size = batch.data.size(0);
             const auto this_loss = loss.item<data_type>();
             total_train_loss += this_loss * this_batch_size;
-            std::this_thread::sleep_for(std::chrono::milliseconds(300));
         }
 
         torch::NoGradGuard no_grad;
@@ -519,7 +520,7 @@ int main()
             auto us_nstm = torch::flip(them_stm, 1);
             auto them_nstm = torch::flip(us_stm, 1);
 
-            torch::Tensor prediction = net.forward(us_stm, them_stm, us_nstm, them_nstm);
+            torch::Tensor prediction = net.forward(us_stm, them_stm);
             auto loss = criterion->forward(prediction, target);
 
             const auto this_batch_size = batch.data.size(0);

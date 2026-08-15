@@ -101,7 +101,6 @@ void Display::display_position(Position& pos, optional<SearchParameters> search_
                 npos.Bitboards[Pieces::White] &= ~get_bitboard(sq);
                 npos.Bitboards[Pieces::Black] &= ~get_bitboard(sq);
                 npos.Bitboards[Pieces::Empty] |= get_bitboard(sq);
-                npos.accumulators_unset(sq, piece);
                 Score score_without_piece;
                 if (do_search)
                 {

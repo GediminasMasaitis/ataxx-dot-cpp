@@ -104,86 +104,6 @@ PositionBase PositionBase::make_move_copy(const MoveStr& move_str) const
     return make_move_copy(move);
 }
 
-void Position::accumulators_push()
-{
-    if constexpr (do_nnue)
-    {
-        if (!enable_accumulator_stack)
-        {
-            return;
-        }
-
-        accumulator_index++;
-        accumulators_stack[accumulator_index] = accumulators_stack[accumulator_index - 1];
-    }
-}
-
-void Position::accumulators_pop()
-{
-    if constexpr (!do_nnue)
-    {
-        return;
-    }
-
-    if (!enable_accumulator_stack)
-    {
-        return;
-    }
-
-    accumulator_index--;
-}
-
-void Position::accumulators_set(const Square sq, const Piece piece)
-{
-    if constexpr (!do_nnue)
-    {
-        return;
-    }
-
-    EvaluationNnueBase::apply_piece<true>(accumulators_stack[accumulator_index], sq, piece);
-}
-
-void Position::accumulators_unset(const Square sq, const Piece piece)
-{
-    if constexpr (!do_nnue)
-    {
-        return;
-    }
-
-    EvaluationNnueBase::apply_piece<false>(accumulators_stack[accumulator_index], sq, piece);
-}
-
-void Position::reset_accumulators()
-{
-    if constexpr (!do_nnue)
-    {
-        return;
-    }
-
-    accumulator_index = 0;
-    auto& accumulators = accumulators_stack[accumulator_index];
-    accumulators[Colors::White] = EvaluationNnueBase::input_biases;
-    accumulators[Colors::Black] = EvaluationNnueBase::input_biases;
-
-    for (Rank rank = 0; rank < 7; rank++)
-    {
-        for (File file = 0; file < 7; file++)
-        {
-            const auto sq = get_square(file, rank);
-            const auto piece = Squares[sq];
-
-            if (piece == Pieces::White)
-            {
-                accumulators_set(sq, piece);
-            }
-            else if (piece == Pieces::Black)
-            {
-                accumulators_set(sq, piece);
-            }
-        }
-    }
-}
-
 void Position::make_move_in_place(const Move& move)
 {
     assert(move != no_move);
@@ -203,15 +123,12 @@ void Position::make_move_in_place(const Move& move)
         return;
     }
 
-    accumulators_push();
-
     // TO
     assert(move.To != no_square);
     assert(Squares[move.To] == Pieces::Empty);
     Squares[move.To] = move.Turn;
     Bitboards[move.Turn] |= get_bitboard(move.To);
     Bitboards[Pieces::Empty] &= ~get_bitboard(move.To);
-    accumulators_set(move.To, move.Turn);
     Key ^= Zobrist.squares[move.Turn][move.To];
 
     // FROM
@@ -222,7 +139,6 @@ void Position::make_move_in_place(const Move& move)
         Squares[move.From] = Pieces::Empty;
         Bitboards[move.Turn] &= ~get_bitboard(move.From);
         Bitboards[Pieces::Empty] |= get_bitboard(move.From);
-        accumulators_unset(move.From, move.Turn);
         Key ^= Zobrist.squares[move.Turn][move.From];
     }
 
@@ -233,8 +149,6 @@ void Position::make_move_in_place(const Move& move)
     {
         const auto attacked_square = pop_lsb(attacked);
         Squares[attacked_square] = move.Turn;
-        accumulators_unset(attacked_square, !move.Turn);
-        accumulators_set(attacked_square, move.Turn);
         Key ^= Zobrist.squares[move.Turn][attacked_square];
         Key ^= Zobrist.squares[!move.Turn][attacked_square];
     }
@@ -270,7 +184,6 @@ void Position::unmake_move()
     Squares[move.To] = Pieces::Empty;
     Bitboards[move.Turn] &= ~get_bitboard(move.To);
     Bitboards[Pieces::Empty] |= get_bitboard(move.To);
-    //accumulators_unset(move.To, move.Turn);
 
     // FROM
     if(undo_data.move.From != no_square)
@@ -280,7 +193,6 @@ void Position::unmake_move()
         Squares[move.From] = Turn;
         Bitboards[Turn] |= get_bitboard(move.From);
         Bitboards[Pieces::Empty] &= ~get_bitboard(move.From);
-        //accumulators_set(move.From, move.Turn);
     }
 
     // CAPTURE
@@ -290,9 +202,6 @@ void Position::unmake_move()
     {
         const auto attacked_square = pop_lsb(undo_data.captured);
         Squares[attacked_square] = !move.Turn;
-        //accumulators_unset(attacked_square, move.Turn);
-        //accumulators_set(attacked_square, !move.Turn);
     }
-    accumulators_pop();
     assert(verify_bitboards());
 }
