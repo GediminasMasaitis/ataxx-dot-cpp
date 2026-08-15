@@ -1,5 +1,6 @@
 #include "search.h"
 
+#include "attacks.h"
 #include "display.h"
 #include "evaluation.h"
 #include "movegen.h"
@@ -52,6 +53,25 @@ Score Search::alpha_beta(ThreadState& thread_state, Position& pos, Ply depth, co
         const auto own_count = pop_count(pos.Bitboards[pos.Turn]);
         const auto opp_count = pop_count(pos.Bitboards[!pos.Turn]);
         const auto empty_count = pop_count(pos.Bitboards[Pieces::Empty]);
+
+        auto reach = pos.Bitboards[pos.Turn];
+        reach |= north(reach) | south(reach);
+        reach |= west(reach) | east(reach);
+        reach |= north(reach) | south(reach);
+        reach |= west(reach) | east(reach);
+        if(!(reach & pos.Bitboards[Pieces::Empty]))
+        {
+            if(own_count > opp_count)
+            {
+                return static_cast<Score>(mate - ply);
+            }
+            if(own_count < opp_count)
+            {
+                return static_cast<Score>(ply - mate);
+            }
+            return 0;
+        }
+
         if(own_count + empty_count > opp_count)
         {
             return static_cast<Score>(mate - ply - empty_count);
@@ -69,7 +89,7 @@ Score Search::alpha_beta(ThreadState& thread_state, Position& pos, Ply depth, co
     }
 
     // EARLY EXITS
-    if(depth == 0 || ply == max_ply - 1 || depth > 2 && thread_state.timer.should_stop_max(thread_state.nodes))
+    if(depth <= 0 || ply == max_ply - 1 || depth > 2 && thread_state.timer.should_stop_max(thread_state.nodes))
     {
         return static_eval;
     }
@@ -132,6 +152,10 @@ Score Search::alpha_beta(ThreadState& thread_state, Position& pos, Ply depth, co
             if(depth > 3 && move_index > 1)
             {
                 reduction = 1 + !is_pv + move_index / 16;
+                if(reduction > depth - 1)
+                {
+                    reduction = depth - 1;
+                }
             }
 
             score = -alpha_beta(thread_state, pos, depth - 1 - reduction, ply + 1, -alpha - 1, -alpha, false);
@@ -213,11 +237,12 @@ SearchResult Search::iteratively_deepen(ThreadState& thread_state, Position& pos
     Score score = 0;
     for(int depth = 1; depth <= max_ply; ++depth)
     {
-        score = alpha_beta(thread_state, pos, depth, 0, -inf, inf, true);
+        const Score iteration_score = alpha_beta(thread_state, pos, depth, 0, -inf, inf, true);
         if(thread_state.timer.stopped)
         {
             break;
         }
+        score = iteration_score;
 
         thread_state.saved_pv = thread_state.plies[0].principal_variation;
 

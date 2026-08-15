@@ -72,7 +72,12 @@ struct DatagenStats
 
 static constexpr uint64_t seed_base = 0;
 static constexpr ThreadCount thread_count = 12;
-static const Position initial_pos = Fens::parse(initial_fen);
+
+static const Position& get_initial_pos()
+{
+    static const Position initial_pos = Fens::parse(initial_fen);
+    return initial_pos;
+}
 
 void write_result_bin(ostream& stream, const DatagenResult& result)
 {
@@ -150,7 +155,7 @@ void do_random_moves(Position& pos, mt19937_64& rng)
     const MoveCount random_move_count = rng() % 2 == 0 ? 10 : 15;
     while (generate_initial_position)
     {
-        pos = initial_pos;
+        pos = get_initial_pos();
         for (MoveCount i = 0; i < random_move_count; i++)
         {
             MoveArray moves;
@@ -194,7 +199,7 @@ void do_random_moves(Position& pos, mt19937_64& rng)
 
 void place_random_pieces(Position& pos, mt19937_64& rng)
 {
-    pos = initial_pos;
+    pos = get_initial_pos();
     for(Color color = Colors::White; color < Colors::Count; color++)
     {
         while(pop_count(pos.Bitboards[color]) < 5)
@@ -220,6 +225,8 @@ void run_iteration(const ThreadCount thread_id, const uint64_t iteration, Search
     const uint64_t seed = seed_base * 1'000'000'000'000ULL + static_cast<uint64_t>(thread_id) * 1'000'000'000ULL + iteration;
     auto rng = mt19937_64(seed);
     //cout << iteration << endl;
+
+    iteration_results.clear();
 
     auto iteration_stats_entry = DatagenStatsEntry{};
     iteration_stats_entry.games = 1;

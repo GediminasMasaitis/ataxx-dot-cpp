@@ -23,6 +23,11 @@ MoveStr Move::to_move_str() const
 
 Move Move::from_move_str(const Color color, const MoveStr& move_str)
 {
+    if(move_str == "pass" || move_str == "0000")
+    {
+        return passes[color];
+    }
+
     if(move_str.size() == 2)
     {
         return Move(color, no_square, from_square_str(move_str));

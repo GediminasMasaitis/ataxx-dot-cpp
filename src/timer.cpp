@@ -48,12 +48,17 @@ bool Timer::should_stop_min(const NodeCount nodes)
 
 bool Timer::should_stop_max(const NodeCount nodes)
 {
+    if(stopped)
+    {
+        return true;
+    }
+
     if(infinite)
     {
         return false;
     }
 
-    if(stopped || (nodes_max > 0 && nodes > nodes_max) || (allocated_time_max > 0 && elapsed() >= allocated_time_max))
+    if((nodes_max > 0 && nodes > nodes_max) || (allocated_time_max > 0 && elapsed() >= allocated_time_max))
     {
         stopped = true;
         return true;
