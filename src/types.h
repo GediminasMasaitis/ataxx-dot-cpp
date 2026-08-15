@@ -23,6 +23,15 @@ constexpr bool do_datagen = true;
 constexpr bool do_datagen = false;
 #endif
 
+// Hidden layer activation. Must match SCRELU in the bullet trainer that
+// produced the network, since it changes what the weights mean.
+#define SCRELU 1
+#if SCRELU
+constexpr bool do_screlu = true;
+#else
+constexpr bool do_screlu = false;
+#endif
+
 using Rank = uint8_t;
 using File = uint8_t;
 using Square = uint8_t;
