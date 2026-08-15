@@ -3,6 +3,7 @@
 #include <array>
 #include <chrono>
 #include <cstdint>
+#include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -336,16 +337,20 @@ struct Net : torch::nn::Module {
     }
 };
 
-void print_params(const Net& model, int epoch)
+void print_params(const Net& model, const string& file_name, const bool full = true)
 {
-    const string float_path = "C:/shared/ataxx/nets/current/default-" + to_string(epoch) + ".nnue-floats";
+    const string base_path = "C:/shared/ataxx/nets/current/" + file_name;
+
+    const string float_path = base_path + ".nnue-floats";
     auto file_float = ofstream(float_path, ios::out | ios::binary);
 
-    const string quantized_path = "C:/shared/ataxx/nets/current/default-" + to_string(epoch) + ".nnue";
-    auto file_quantized = ofstream(quantized_path, ios::out | ios::binary);
-
-    const string human_path = "C:/shared/ataxx/nets/current/default-" + to_string(epoch) + ".txt";
-    auto file_human = ofstream(human_path, ios::out);
+    ofstream file_quantized;
+    ofstream file_human;
+    if (full)
+    {
+        file_quantized = ofstream(base_path + ".nnue", ios::out | ios::binary);
+        file_human = ofstream(base_path + ".txt", ios::out);
+    }
 
     stringstream ss;
     float max_val = 0;
@@ -377,12 +382,15 @@ void print_params(const Net& model, int epoch)
                 max_val = rounded_abs;
             }
 
-            auto quantized = static_cast<quantized_type>(rounded);
-            file_quantized.write(reinterpret_cast<char*>(&quantized), sizeof(quantized_type));
+            if (full)
+            {
+                auto quantized = static_cast<quantized_type>(rounded);
+                file_quantized.write(reinterpret_cast<char*>(&quantized), sizeof(quantized_type));
 
-            const auto val_human = to_string(quantized);
-            file_human << val_human << " ";
-            ss << val_human << " ";
+                const auto val_human = to_string(quantized);
+                file_human << val_human << " ";
+                ss << val_human << " ";
+            }
         }
         ss << endl;
         file_human << endl;
@@ -392,8 +400,11 @@ void print_params(const Net& model, int epoch)
     const auto str = ss.str();
     //cout << str;
     file_float.flush();
-    file_quantized.flush();
-    file_human.flush();
+    if (full)
+    {
+        file_quantized.flush();
+        file_human.flush();
+    }
 }
 
 void print_time(chrono::time_point<chrono::high_resolution_clock> start)
@@ -412,6 +423,14 @@ void print_time(chrono::time_point<chrono::high_resolution_clock> start)
 int run_training()
 {
     const auto start = chrono::high_resolution_clock::now();
+
+    const auto run_start_time = time(nullptr);
+    tm run_start_tm;
+    localtime_s(&run_start_tm, &run_start_time);
+    char run_stamp[32];
+    strftime(run_stamp, sizeof(run_stamp), "%Y%m%d-%H%M%S", &run_start_tm);
+    const string run_name = run_stamp;
+    cout << "Run: " << run_name << endl;
     //auto device = torch::Device(torch::kCPU);
     auto device = torch::Device(torch::kCUDA);
     cout << "CUDA available: " << torch::cuda::is_available() << endl;
@@ -524,6 +543,10 @@ int run_training()
                 print_time(epoch_start);
                 cout << "Batch " << batch_index << " | Loss: " << loss.item<data_type>() << endl;
             }
+            if (batch_index % 1000 == 0)
+            {
+                print_params(net, "default-" + run_name + "-" + to_string(epoch) + "-b" + to_string(batch_index), false);
+            }
         }
         total_train_loss = train_loss_accumulator.item<data_type>();
 
@@ -551,7 +574,7 @@ int run_training()
         cout << "Epoch: " << epoch << " | Train loss: " << average_train_loss << " | Test loss: " << average_test_loss << std::endl;
         total_train_loss = 0;
         total_test_loss = 0;
-        print_params(net, epoch);
+        print_params(net, "default-" + run_name + "-" + to_string(epoch));
     }
 
     //torch::NoGradGuard no_grad;
