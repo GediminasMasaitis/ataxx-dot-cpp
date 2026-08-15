@@ -16,7 +16,7 @@ class Search
 public:
     SearchState state;
 
-    Score alpha_beta(ThreadState& thread_state, Position& pos, Ply depth, Ply ply, Score alpha, Score bet, bool is_pv);
+    Score alpha_beta(ThreadState& thread_state, Position& pos, Ply depth, Ply ply, Score alpha, Score bet, bool is_pv, Move excluded = no_move);
     Score aspiration(ThreadState& thread_state, Position& pos, Ply iteration_depth, Score score);
     SearchResult iteratively_deepen(ThreadState& thread_state, Position& pos);
     SearchResult lazy_smp(Position& pos);

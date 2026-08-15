@@ -30,7 +30,7 @@ static Score static_evaluate(const Position& pos)
     return Evaluation::evaluate(pos);
 }
 
-Score Search::alpha_beta(ThreadState& thread_state, Position& pos, Ply depth, const Ply ply, Score alpha, const Score beta, const bool is_pv)
+Score Search::alpha_beta(ThreadState& thread_state, Position& pos, Ply depth, const Ply ply, Score alpha, const Score beta, const bool is_pv, const Move excluded)
 {
     auto& ply_state = thread_state.plies[ply];
 
@@ -98,7 +98,7 @@ Score Search::alpha_beta(ThreadState& thread_state, Position& pos, Ply depth, co
     TranspositionTableEntry tt_entry;
     const bool tt_entry_exists = state.table.get(pos.Key, tt_entry);
     if (tt_entry_exists) {
-        if (ply > 0 && tt_entry.depth >= depth) {
+        if (ply > 0 && excluded == no_move && tt_entry.depth >= depth) {
             if (tt_entry.flag == Upper && tt_entry.score <= alpha) {
                 return tt_entry.score;
             }
@@ -121,7 +121,7 @@ Score Search::alpha_beta(ThreadState& thread_state, Position& pos, Ply depth, co
     }
 
     // REVERSE FUTILITY PRUNING
-    if(!is_pv && depth < 8 && static_evaluate(pos) - 100 * depth > beta)
+    if(!is_pv && excluded == no_move && depth < 8 && static_evaluate(pos) - 100 * depth > beta)
     {
         return beta;
     }
@@ -141,6 +141,12 @@ Score Search::alpha_beta(ThreadState& thread_state, Position& pos, Ply depth, co
     {
         MoveOrder::order_next_move(moves, move_scores, move_count, move_index);
 
+        const auto& move = moves[move_index];
+        if(move == excluded)
+        {
+            continue;
+        }
+
         // FUTILITY PRUNING
         if(ply > 0 && depth <= 4 && move_index >= 3
             && best_score > -(mate - 200) && alpha < mate - 200)
@@ -156,7 +162,31 @@ Score Search::alpha_beta(ThreadState& thread_state, Position& pos, Ply depth, co
             }
         }
 
-        const auto& move = moves[move_index];
+        // SINGULAR EXTENSIONS
+        auto extension = 0;
+        if(tt_entry_exists
+            && move == tt_entry.move
+            && excluded == no_move
+            && !is_pv
+            && depth >= 6
+            && tt_entry.score > -(mate - 200) && tt_entry.score < mate - 200
+            && tt_entry.depth >= depth - 3
+            && tt_entry.flag != Upper)
+        {
+            const Score singular_beta = static_cast<Score>(tt_entry.score - depth);
+            const Score singular_score = alpha_beta(thread_state, pos, (depth - 1) / 2, ply, singular_beta - 1, singular_beta, false, move);
+
+            if(singular_score < singular_beta)
+            {
+                extension = 1;
+            }
+            // MULTICUT
+            else if(singular_beta >= beta)
+            {
+                return singular_beta;
+            }
+        }
+
         pos.make_move_in_place(move);
         thread_state.nodes++;
 
@@ -187,7 +217,7 @@ Score Search::alpha_beta(ThreadState& thread_state, Position& pos, Ply depth, co
         }
         else
         {
-            score = -alpha_beta(thread_state, pos, depth - 1, ply + 1, -beta, -alpha, is_pv);
+            score = -alpha_beta(thread_state, pos, depth - 1 + extension, ply + 1, -beta, -alpha, is_pv);
         }
         pos.unmake_move();
 
@@ -241,7 +271,7 @@ Score Search::alpha_beta(ThreadState& thread_state, Position& pos, Ply depth, co
     }
 
     // STORE TRANSPOSITION TABLE
-    if(!thread_state.timer.stopped)
+    if(!thread_state.timer.stopped && excluded == no_move)
     {
         state.table.set(pos.Key, flag, best_score, depth, best_move);
     }
