@@ -25,6 +25,36 @@ constexpr auto data_type_val = torch::kFloat32;
 using data_type = float_t;
 using quantized_type = int16_t;
 
+class TeeBuf : public streambuf
+{
+    streambuf* first;
+    streambuf* second;
+
+public:
+    TeeBuf(streambuf* first, streambuf* second) : first(first), second(second)
+    {
+    }
+
+protected:
+    int overflow(int ch) override
+    {
+        if (ch == char_traits<char>::eof())
+        {
+            return 0;
+        }
+        const auto first_result = first->sputc(static_cast<char>(ch));
+        const auto second_result = second->sputc(static_cast<char>(ch));
+        return (first_result == char_traits<char>::eof() || second_result == char_traits<char>::eof()) ? char_traits<char>::eof() : ch;
+    }
+
+    int sync() override
+    {
+        const auto first_result = first->pubsync();
+        const auto second_result = second->pubsync();
+        return (first_result == 0 && second_result == 0) ? 0 : -1;
+    }
+};
+
 struct DataEntry
 {
     Bitboard white;
@@ -430,6 +460,11 @@ int run_training()
     char run_stamp[32];
     strftime(run_stamp, sizeof(run_stamp), "%Y%m%d-%H%M%S", &run_start_tm);
     const string run_name = run_stamp;
+
+    static ofstream log_file("C:/shared/ataxx/nets/current/" + run_name + ".log", ios::out);
+    static TeeBuf tee_buf(cout.rdbuf(), log_file.rdbuf());
+    cout.rdbuf(&tee_buf);
+
     cout << "Run: " << run_name << endl;
     //auto device = torch::Device(torch::kCPU);
     auto device = torch::Device(torch::kCUDA);
