@@ -456,3 +456,94 @@ void Datagen::read()
     }
     
 }
+
+struct DatagenResultExt
+{
+    Bitboard white;
+    Bitboard black;
+    Color turn;
+    Wdl wdl;
+    Score score;
+    Square from;
+    Square to;
+};
+
+void write_ext(ofstream& file, const DatagenResultExt& entry)
+{
+    file.write(reinterpret_cast<const char*>(&entry.white), sizeof(entry.white));
+    file.write(reinterpret_cast<const char*>(&entry.black), sizeof(entry.black));
+    file.write(reinterpret_cast<const char*>(&entry.turn), sizeof(entry.turn));
+    file.write(reinterpret_cast<const char*>(&entry.wdl), sizeof(entry.wdl));
+    file.write(reinterpret_cast<const char*>(&entry.score), sizeof(entry.score));
+    file.write(reinterpret_cast<const char*>(&entry.from), sizeof(entry.from));
+    file.write(reinterpret_cast<const char*>(&entry.to), sizeof(entry.to));
+}
+
+std::vector<std::string> split_by_delimiter(const std::string& str, const std::string& delimiter) {
+    std::vector<std::string> tokens;
+    size_t start = 0, end = 0;
+
+    // Loop until we have parsed the whole string
+    while ((end = str.find(delimiter, start)) != std::string::npos) {
+        // Extract substring from start to end
+        tokens.push_back(str.substr(start, end - start));
+        // Move the start position past this delimiter
+        start = end + delimiter.length();
+    }
+    // Add the last token
+    tokens.push_back(str.substr(start));
+
+    return tokens;
+}
+
+void Datagen::convert2()
+{
+    const auto path = "C:/shared/ataxx/data/Zataxx-550M-bestmove.txt";
+    const auto out_path = "C:/shared/ataxx/data/Zataxx-550M-bestmove.bin";
+    auto file = ifstream(path);
+    auto out_file = ofstream(out_path, ios::binary);
+
+    string line;
+    auto index = 0;
+    while (getline(file, line))
+    {
+        if (line.empty())
+        {
+            break;
+        }
+
+        auto tokens = split_by_delimiter(line, " | ");
+
+        auto pos = Fens::parse(tokens[0]);
+        //Display::display_position(pos, nullopt);
+        //cout << "WDL: " << line[line.length() - 1] << endl;
+        //cout << "NNUE: " << EvaluationNnue::evaluate(pos) << endl;
+
+        DatagenResultExt entry;
+        entry.white = pos.Bitboards[Pieces::White];
+        entry.black = pos.Bitboards[Pieces::Black];
+        entry.turn = pos.Turn;
+        auto move_str = tokens[1];
+        if (move_str == "0000")
+        {
+            continue;
+        }
+        auto move = Move::from_move_str(pos.Turn, move_str);
+        entry.from = move.From;
+        entry.to = move.To;
+        entry.score = stoi(tokens[2]);
+        auto wdl = stof(tokens[3]);
+        auto wdl2 = static_cast<int8_t>(2 - (wdl * 2));
+        entry.wdl = wdl2;
+
+        write_ext(out_file, entry);
+
+        constexpr size_t print_every = 100000;
+        if (index % print_every == print_every - 1)
+        {
+            cout << "Read " << index + 1 << " entries" << endl;
+        }
+        index++;
+    }
+    out_file.flush();
+}
